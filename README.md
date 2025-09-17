@@ -1,5 +1,265 @@
 # 🚢 Docker Multi‑Container Project (Volumes + Multiple Networks)
 
+cd docker-multicontainer-project
+cp .env.example .env   # edit passwords/ports
+docker compose --env-file .env up -d --build
+
+Perfect 🎉 — now your full multi-container stack is up and running:
+
+* **nginx (web proxy)** → [http://localhost:8082](http://localhost:8082)
+* **Flask app (behind nginx)** → [http://localhost:8082/](http://localhost:8082/)
+
+  * `/health` → healthcheck
+  * `/db` → insert/read rows
+  * `/enqueue` → queue background tasks
+* **Postgres** (with init SQL) → internal only
+* **Redis** → internal only
+* **Celery worker** → processes jobs from app
+* **pgAdmin** → [http://localhost:8081](http://localhost:8081) (connect to host `db`, port `5432`, creds from `.env`)
+
+✅ All containers are **healthy and running**.
+
+Here’s a compact, copy-paste friendly **command catalog** for your multi-container project.
+(Use one command per line—no inline comments—to avoid zsh errors.)
+
+---
+
+# 0) Go to the project
+
+```bash
+cd /path/to/docker-multicontainer-project
+```
+
+# 1) Launch / Stop / Rebuild
+
+```bash
+cp .env.example .env
+docker compose --env-file .env up -d --build
+docker compose ps
+docker compose down
+docker compose down -v
+docker compose up -d --force-recreate
+```
+
+## Makefile shortcuts (if you prefer)
+
+```bash
+make up
+make down
+make wipe
+make ps
+make logs
+```
+
+---
+
+# 2) App through Nginx (HTTP on \$NGINX\_HTTP\_PORT)
+
+```bash
+curl http://localhost:8082/
+curl http://localhost:8082/health
+```
+
+# 3) DB via the App (Postgres)
+
+```bash
+curl -X POST http://localhost:8082/db -H 'Content-Type: application/json' -d '{"note":"hello from Atul"}'
+curl http://localhost:8082/db
+```
+
+# 4) Background jobs (Celery via Redis)
+
+```bash
+TASK_ID=$(curl -s -X POST http://localhost:8082/enqueue -H 'Content-Type: application/json' -d '{"x":40,"y":2}' | jq -r .task_id)
+curl http://localhost:8082/result/$TASK_ID
+```
+
+---
+
+# 5) pgAdmin (UI)
+
+Open in browser:
+
+```
+http://localhost:8081/
+```
+
+Then add a server with:
+
+* Host: `db`
+* Port: `5432`
+* User: from `.env` (e.g., `appuser`)
+* Password: from `.env`
+* Database: from `.env`
+
+### Reset pgAdmin admin user (re-seed from `.env`)
+
+```bash
+docker compose rm -s -f pgadmin
+docker volume rm docker-multicontainer-project_pgadmin-data
+docker compose --env-file .env up -d pgadmin
+docker compose logs pgadmin --tail=100
+```
+
+---
+
+# 6) Service Logs & Status
+
+```bash
+docker compose ps
+docker compose logs app --tail=100
+docker compose logs nginx --tail=100
+docker compose logs db --tail=100
+docker compose logs redis --tail=100
+docker compose logs worker --tail=100
+docker compose logs pgadmin --tail=100
+```
+
+---
+
+# 7) Exec into Containers
+
+```bash
+docker exec -it web sh
+docker compose exec app sh
+docker compose exec db sh
+docker compose exec cache sh
+docker compose exec worker sh
+docker compose exec pgadmin sh
+```
+
+---
+
+# 8) Health & Connectivity (Inside containers)
+
+```bash
+docker exec -it web sh -lc 'wget -qO- http://localhost/health || curl -s http://localhost/health'
+docker exec -it web sh -lc 'wget -qO- http://app:5000/health || curl -s http://app:5000/health'
+docker compose exec app sh -lc 'curl -s http://localhost:5000/health'
+```
+
+---
+
+# 9) Redis Quick Test (from app)
+
+```bash
+docker compose exec app sh -lc 'python - << "PY"
+import os, redis
+r = redis.Redis.from_url(os.getenv("REDIS_URL","redis://redis:6379/0"))
+print("PING:", r.ping())
+print("INCR hits:", r.incr("hits"))
+PY'
+```
+
+---
+
+# 10) Postgres Shell (psql)
+
+```bash
+docker compose exec db psql -U $POSTGRES_USER -d $POSTGRES_DB
+```
+
+Inside psql:
+
+```sql
+\dt
+SELECT * FROM visits ORDER BY id DESC LIMIT 10;
+\q
+```
+
+---
+
+# 11) Nginx Config Check & Reload
+
+```bash
+docker exec -it web sh -lc 'ls -l /etc/nginx/conf.d'
+docker exec -it web sh -lc 'nginx -t'
+docker compose restart nginx
+```
+
+---
+
+# 12) Scaling Workers
+
+```bash
+docker compose up -d --scale worker=3
+docker compose ps
+```
+
+---
+
+# 13) Freeing Ports / Changing Ports
+
+```bash
+sudo lsof -nP -iTCP:8080 -sTCP:LISTEN
+sudo lsof -nP -iTCP:8081 -sTCP:LISTEN
+sudo lsof -nP -iTCP:8082 -sTCP:LISTEN
+```
+
+If needed, edit `.env` and then:
+
+```bash
+docker compose up -d
+```
+
+---
+
+# 14) Inspect Effective Compose Config
+
+```bash
+docker compose config
+docker compose config | grep -A1 PGADMIN_PORT
+```
+
+---
+
+# 15) Networks & Volumes
+
+```bash
+docker network ls
+docker network inspect docker-multicontainer-project_back-net
+docker volume ls
+docker volume inspect docker-multicontainer-project_db-data
+```
+
+---
+
+# 16) Backup / Restore Volumes (example: pgAdmin)
+
+```bash
+VOL=docker-multicontainer-project_pgadmin-data
+docker run --rm -v $VOL:/data -v "$PWD":/backup alpine sh -lc 'tar czf /backup/pgadmin-data-backup.tgz -C /data .'
+ls -lh pgadmin-data-backup.tgz
+```
+
+Restore:
+
+```bash
+VOL=docker-multicontainer-project_pgadmin-data
+docker run --rm -v $VOL:/data -v "$PWD":/backup alpine sh -lc 'rm -rf /data/* && tar xzf /backup/pgadmin-data-backup.tgz -C /data'
+```
+
+---
+
+# 17) Common Fixes
+
+```bash
+docker compose restart nginx
+docker compose up -d --force-recreate app nginx
+docker exec -it web sh -lc 'tail -n 100 /var/log/nginx/error.log'
+docker compose logs app --tail=200
+```
+
+---
+
+If you want, I can ship an updated ZIP that includes:
+
+* pgAdmin `9.8`,
+* the corrected `curl` healthcheck for `app`,
+* and the `version:` line removed from `docker-compose.yml`.
+
+
+
 **Stack:** Nginx (reverse proxy), Flask (Gunicorn) app, Celery worker, PostgreSQL, Redis, pgAdmin  
 **Networks:** `front-net` (edge), `back-net` (private)  
 **Volumes:** DB/Redis/pgAdmin persistent data + Nginx logs + bind‑mounted app code
