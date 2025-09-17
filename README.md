@@ -1,9 +1,10 @@
 # 🚢 Docker Multi‑Container Project (Volumes + Multiple Networks)
-
+```
+git clone https://github.com/atulkamble/docker-multicontainer-project.git
 cd docker-multicontainer-project
 cp .env.example .env   # edit passwords/ports
 docker compose --env-file .env up -d --build
-
+```
 Perfect 🎉 — now your full multi-container stack is up and running:
 
 * **nginx (web proxy)** → [http://localhost:8082](http://localhost:8082)
