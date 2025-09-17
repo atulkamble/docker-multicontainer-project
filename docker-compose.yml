@@ -1,0 +1,127 @@
+version: "3.9"
+
+x-healthcheck-defaults: &health
+  interval: 10s
+  timeout: 3s
+  retries: 5
+  start_period: 15s
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: web
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "${NGINX_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx-logs:/var/log/nginx
+    networks:
+      - front-net
+      - back-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
+      <<: *health
+
+  app:
+    build: ./services/app
+    container_name: app
+    environment:
+      FLASK_ENV: ${FLASK_ENV}
+      SECRET_KEY: ${SECRET_KEY}
+      DB_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      APP_PORT: ${APP_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./services/app:/app:cached
+    expose:
+      - "5000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - back-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/health"]
+      <<: *health
+
+  worker:
+    build: ./services/app
+    container_name: worker
+    command: ["bash", "-lc", "celery -A app.celery worker --loglevel=INFO"]
+    environment:
+      FLASK_ENV: ${FLASK_ENV}
+      SECRET_KEY: ${SECRET_KEY}
+      DB_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - back-net
+
+  db:
+    image: postgres:16-alpine
+    container_name: db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - back-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      <<: *health
+
+  redis:
+    image: redis:7-alpine
+    container_name: cache
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - back-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      <<: *health
+
+  pgadmin:
+    image: dpage/pgadmin4:8.13
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "${PGADMIN_PORT:-8081}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - front-net
+      - back-net
+
+volumes:
+  db-data:
+  redis-data:
+  pgadmin-data:
+  nginx-logs:
+
+networks:
+  front-net:
+    driver: bridge
+  back-net:
+    driver: bridge
