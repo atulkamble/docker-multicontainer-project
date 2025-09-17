@@ -24,6 +24,7 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
       <<: *health
+    restart: unless-stopped
 
   app:
     build: ./services/app
@@ -49,8 +50,10 @@ services:
     networks:
       - back-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:5000/health"]
+      # use curl (installed in the app image)
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5000/health || exit 1"]
       <<: *health
+    restart: unless-stopped
 
   worker:
     build: ./services/app
@@ -68,6 +71,7 @@ services:
         condition: service_healthy
     networks:
       - back-net
+    restart: unless-stopped
 
   db:
     image: postgres:16-alpine
@@ -84,6 +88,7 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
       <<: *health
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -96,6 +101,7 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       <<: *health
+    restart: unless-stopped
 
   pgadmin:
     image: dpage/pgadmin4:8.13
@@ -113,6 +119,7 @@ services:
     networks:
       - front-net
       - back-net
+    restart: unless-stopped
 
 volumes:
   db-data:
